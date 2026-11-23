@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 
 import 'models.dart';
 
+const defaultBackupFolder = 'Cloud Photo Vault';
 const driveFileScope = 'https://www.googleapis.com/auth/drive.file';
 const googleWebClientId = String.fromEnvironment('GOOGLE_WEB_CLIENT_ID');
 
@@ -29,6 +30,7 @@ class DriveGateway {
   final GoogleSignIn _signIn = GoogleSignIn.instance;
   GoogleSignInAccount? _account;
   bool _initialized = false;
+  String backupFolder = defaultBackupFolder;
 
   GoogleSignInAccount? get account => _account;
 
@@ -101,7 +103,7 @@ class DriveGateway {
   }
 
   Future<String> _destinationFolder(drive.DriveApi api, DateTime created) async {
-    final root = await _ensureFolder(api, 'Cloud Photo Vault', null);
+    final root = await _ensureFolder(api, backupFolder, null);
     final year = await _ensureFolder(api, '${created.year}', root);
     final month = created.month.toString().padLeft(2, '0');
     return _ensureFolder(api, month, year);

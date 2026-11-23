@@ -6,8 +6,9 @@
 
 - Google account sign-in with the official `google_sign_in` 7.x plugin
 - Permission-based scanning of phone photos and videos, including Android 14+ limited access
-- Gallery selection or **Back up all new photos** button
-- Original-quality file upload to the user's own Google Drive (folder: `Cloud Photo Vault / YYYY / MM`)
+- Gallery selection with oldest-first sorting and a jump-to-month filter, or a confirmed full-gallery backup
+- A persistent progress bar during manual backups and a cleanup shortcut limited to the last selected backup batch
+- Original-quality file upload to the user's own Google Drive (default folder: `Cloud Photo Vault / YYYY / MM`, editable under **Home → Backup destination**)
 - Streaming file hashing (MD5) to avoid loading large videos into RAM
 - Duplicate detection using Google Drive `appProperties`, plus SQLite backup history
 - File size + MD5 verification from Google Drive before marking any file safe

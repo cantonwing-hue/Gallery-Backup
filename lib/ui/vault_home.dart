@@ -58,7 +58,8 @@ class _VaultHomeState extends State<VaultHome> {
                   Expanded(child: Text(c.notice, style: const TextStyle(fontSize: 12, color: _ink))),
                 ]),
               ),
-            if (c.busy) const LinearProgressIndicator(minHeight: 2),
+            if (c.busy && !c.backingUp) const LinearProgressIndicator(minHeight: 2),
+            if (c.backingUp) _backupProgress(c),
             Expanded(child: IndexedStack(index: _tab, children: [
               _dashboard(c),
               _gallery(c),
@@ -70,7 +71,10 @@ class _VaultHomeState extends State<VaultHome> {
         bottomNavigationBar: NavigationBar(
           selectedIndex: _tab,
           onDestinationSelected: (index) {
-            setState(() => _tab = index);
+            setState(() {
+              _tab = index;
+              _cleanupSelected.clear();
+            });
             if (index == 2 && c.connected) c.refreshCounts();
           },
           destinations: const [
@@ -105,6 +109,14 @@ class _VaultHomeState extends State<VaultHome> {
         const SizedBox(height: 12),
         Text(c.email ?? 'Connect your own Google account. No developer storage or server.',
           style: TextStyle(fontSize: 13, color: Colors.grey.shade700)),
+        if (c.connected)
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Backup destination'),
+            subtitle: Text('My Drive / ${c.backupFolder} / Year / Month'),
+            trailing: const Icon(Icons.edit_outlined),
+            onTap: c.busy || c.backingUp ? null : () => _chooseBackupFolder(c),
+          ),
         if (!c.connected) ...[
           const SizedBox(height: 14),
           FilledButton.icon(onPressed: c.busy ? null : c.connect,
@@ -119,23 +131,19 @@ class _VaultHomeState extends State<VaultHome> {
         const Text('Only verified cloud copies can be moved to Android Bin. You approve every clean-up.',
           style: TextStyle(color: Color(0xFF5F7773), height: 1.35)),
         const SizedBox(height: 14),
-        if (c.backingUp) ...[
-          LinearProgressIndicator(value: c.progress?.fraction),
-          const SizedBox(height: 9),
-          Text('${c.progress?.done ?? 0} / ${c.progress?.total ?? 0} · ${c.progress?.currentFile ?? "Preparing"}',
-            maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
-          TextButton.icon(onPressed: c.cancelBackup,
-            icon: const Icon(Icons.stop_circle_outlined), label: const Text('Stop after current file')),
-        ] else ...[
+        if (!c.backingUp) ...[
           SizedBox(width: double.infinity, child: FilledButton.icon(
-            onPressed: c.connected && !c.busy ? () => c.startBackup() : null,
+            onPressed: c.connected && !c.busy ? () => _confirmFullBackup(c) : null,
             icon: const Icon(Icons.backup_rounded),
-            label: const Text('Back up all new photos'),
+            label: const Text('Back up entire gallery'),
             style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 15)),
           )),
           const SizedBox(height: 8),
           SizedBox(width: double.infinity, child: OutlinedButton.icon(
-            onPressed: c.busy ? null : () async { await c.scanPhotos(); setState(() => _tab = 1); },
+            onPressed: c.busy || c.loadingPhotos ? null : () {
+              setState(() => _tab = 1);
+              if (c.assets.isEmpty) c.scanPhotos();
+            },
             icon: const Icon(Icons.photo_library_outlined),
             label: const Text('Choose photos manually'),
           )),
@@ -187,22 +195,131 @@ class _VaultHomeState extends State<VaultHome> {
     ],
   ));
 
+  Future<void> _confirmFullBackup(VaultController c) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Check the entire gallery?'),
+        content: Text(
+          'This will check every accessible photo and video. New uploads go to '
+          '${c.email} / My Drive / ${c.backupFolder}.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Back up entire gallery')),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) await c.startBackup();
+  }
+
+  Widget _backupProgress(VaultController c) {
+    final progress = c.progress;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        LinearProgressIndicator(value: progress?.fraction ?? 0, minHeight: 6),
+        Row(children: [
+          Expanded(child: Text(
+            progress == null
+                ? 'Preparing backup…'
+                : '${progress.done} of ${progress.total} checked · ${progress.uploaded} uploaded',
+          )),
+          TextButton(onPressed: c.cancelBackup, child: const Text('Stop')),
+        ]),
+        if (progress != null)
+          Text(
+            '${progress.currentFile} · ${progress.skipped} already backed up · ${progress.errors} failed',
+            maxLines: 1, overflow: TextOverflow.ellipsis,
+          ),
+      ]),
+    );
+  }
+
+  Future<void> _chooseBackupFolder(VaultController c) async {
+    var folder = c.backupFolder;
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Backup folder in My Drive'),
+        content: TextFormField(
+          initialValue: folder,
+          onChanged: (value) => folder = value,
+          maxLength: 120,
+          decoration: const InputDecoration(
+            labelText: 'Folder name',
+            helperText: 'Used for new uploads. Year and month folders are added automatically.',
+            helperMaxLines: 3,
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              if (folder.trim().isNotEmpty) Navigator.pop(dialogContext, folder);
+            },
+            child: const Text('Save folder'),
+          ),
+        ],
+      ),
+    );
+    if (choice != null && mounted) await c.changeBackupFolder(choice);
+  }
+
+  Future<void> _chooseGalleryMonth(VaultController c) async {
+    final now = DateTime.now();
+    final date = await showDatePicker(
+      context: context,
+      helpText: 'Choose any date in the month to show',
+      initialDate: c.galleryDate ?? now,
+      firstDate: DateTime(1970),
+      lastDate: now,
+      initialDatePickerMode: DatePickerMode.year,
+    );
+    if (date != null && mounted) {
+      await c.changeGallery(oldest: c.oldestFirst, month: date);
+    }
+  }
+
   Widget _gallery(VaultController c) => Column(children: [
     Padding(padding: const EdgeInsets.fromLTRB(18, 18, 18, 8), child: Row(children: [
       Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         const Text('Your gallery', style: TextStyle(fontSize: 23, fontWeight: FontWeight.w900, color: _ink)),
-        Text('${c.assets.length} loaded of ${c.totalPhotos} · ${c.selected.length} selected',
+        Text('${c.assets.length} loaded of ${c.matchingPhotos} · ${c.selected.length} selected',
           style: const TextStyle(fontSize: 12, color: Colors.black54)),
       ])),
-      TextButton(onPressed: c.assets.isEmpty ? null : c.selectVisible, child: const Text('Select loaded')),
-      IconButton(onPressed: c.selected.isEmpty ? null : c.clearSelected,
+      TextButton(onPressed: c.assets.isEmpty || c.backingUp || c.busy ? null : c.selectVisible, child: const Text('Select loaded')),
+      IconButton(onPressed: c.selected.isEmpty || c.backingUp || c.busy ? null : c.clearSelected,
         tooltip: 'Clear selection', icon: const Icon(Icons.deselect)),
     ])),
+    Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      child: Wrap(spacing: 8, children: [
+        ActionChip(
+          label: Text(c.oldestFirst ? 'Oldest first' : 'Newest first'),
+          avatar: const Icon(Icons.sort, size: 18),
+          onPressed: c.busy || c.loadingPhotos || c.backingUp ? null : () =>
+            c.changeGallery(oldest: !c.oldestFirst, month: c.galleryDate),
+        ),
+        ActionChip(
+          avatar: const Icon(Icons.date_range, size: 18),
+          label: Text(c.galleryDate == null ? 'Jump to month' :
+            MaterialLocalizations.of(context).formatMonthYear(c.galleryDate!)),
+          onPressed: c.busy || c.loadingPhotos || c.backingUp ? null : () => _chooseGalleryMonth(c),
+        ),
+        if (c.galleryDate != null)
+          ActionChip(
+            label: const Text('All dates'),
+            onPressed: c.busy || c.loadingPhotos || c.backingUp ? null : () =>
+              c.changeGallery(oldest: c.oldestFirst),
+          ),
+      ]),
+    ),
     if (c.assets.isEmpty)
       Expanded(child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
         const Icon(Icons.photo_library_outlined, size: 58, color: _teal),
         const SizedBox(height: 10),
-        const Text('Scan to see your photos'),
+        Text(c.galleryDate == null ? 'Scan to see your photos' : 'No photos in this month'),
         const SizedBox(height: 12),
         FilledButton(onPressed: c.busy ? null : c.scanPhotos, child: const Text('Scan photos')),
       ])))
@@ -215,6 +332,7 @@ class _VaultHomeState extends State<VaultHome> {
           return false;
         },
         child: GridView.builder(
+          key: ValueKey((c.oldestFirst, c.galleryDate)),
           padding: const EdgeInsets.all(8),
           gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: 3, mainAxisSpacing: 5, crossAxisSpacing: 5,
@@ -224,9 +342,10 @@ class _VaultHomeState extends State<VaultHome> {
             final asset = c.assets[index];
             final chosen = c.selected.contains(asset.id);
             return InkWell(
-              onTap: () => c.toggleSelect(asset.id),
+              key: ValueKey(asset.id),
+              onTap: c.backingUp || c.busy ? null : () => c.toggleSelect(asset),
               child: Stack(fit: StackFit.expand, children: [
-                ClipRRect(borderRadius: BorderRadius.circular(8), child: _thumb(asset)),
+                ClipRRect(borderRadius: BorderRadius.circular(8), child: _GalleryThumbnail(key: ValueKey(asset.id), asset: asset)),
                 if (chosen) Container(decoration: BoxDecoration(
                   color: _teal.withValues(alpha: 0.28),
                   borderRadius: BorderRadius.circular(8),
@@ -244,27 +363,21 @@ class _VaultHomeState extends State<VaultHome> {
         ),
       )),
     if (c.canLoadMore && c.assets.isNotEmpty)
-      TextButton(onPressed: c.loadMore, child: const Text('Load more')),
+      TextButton(onPressed: c.busy ? null : c.loadMore, child: const Text('Load more')),
     Padding(padding: const EdgeInsets.fromLTRB(16, 6, 16, 15), child: SizedBox(
       width: double.infinity,
       child: FilledButton.icon(
-        onPressed: c.selected.isNotEmpty && c.connected && !c.backingUp ? () => c.startBackup(selectedOnly: true) : null,
+        onPressed: c.selected.isNotEmpty && c.connected && !c.backingUp && !c.busy ? () => c.startBackup(selectedOnly: true) : null,
         icon: const Icon(Icons.cloud_upload_outlined),
         label: Text(c.backingUp ? 'Backing up…' : 'Back up ${c.selected.length} selected'),
       ),
     )),
   ]);
 
-  Widget _thumb(AssetEntity asset) => FutureBuilder<Uint8List?>(
-    future: asset.thumbnailDataWithSize(const ThumbnailSize(220, 220), quality: 75),
-    builder: (context, snapshot) => snapshot.data == null
-        ? const ColoredBox(color: Color(0xFFE2E9E5), child: Icon(Icons.image_outlined, color: Colors.blueGrey))
-        : Image.memory(snapshot.data!, fit: BoxFit.cover),
-  );
-
   Widget _cleanup(VaultController c) {
     final records = c.readyForCleanup;
     final selectedRecords = records.where((r) => _cleanupSelected.contains(r.assetId)).toList();
+    final recentRecords = records.where((r) => c.lastSelectedBatch.contains(r.assetId)).toList();
     return Column(children: [
       Padding(padding: const EdgeInsets.fromLTRB(18, 16, 18, 8), child: Column(
         crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -272,13 +385,18 @@ class _VaultHomeState extends State<VaultHome> {
           const SizedBox(height: 7),
           const Text('Every item will be checked against Google Drive AGAIN before Android asks your permission.',
             style: TextStyle(color: Colors.black54, fontSize: 13)),
-          Row(children: [
-            Text('${records.length} verified records available', style: const TextStyle(fontSize: 12)),
-            const Spacer(),
-            TextButton(onPressed: records.isEmpty ? null : () {
-              setState(() => _cleanupSelected.addAll(records.map((e) => e.assetId)));
-            }, child: const Text('Select all')),
-            TextButton(onPressed: () => setState(_cleanupSelected.clear), child: const Text('Clear')),
+          Text('${selectedRecords.length} selected · ${records.length} available for review'),
+          Wrap(spacing: 8, children: [
+            if (recentRecords.isNotEmpty)
+              TextButton(
+                onPressed: c.busy || c.backingUp ? null : () => setState(() {
+                  _cleanupSelected.clear();
+                  _cleanupSelected.addAll(recentRecords.map((r) => r.assetId));
+                }),
+                child: Text('Select last backup batch (${recentRecords.length})'),
+              ),
+            if (selectedRecords.isNotEmpty)
+              TextButton(onPressed: c.busy ? null : () => setState(_cleanupSelected.clear), child: const Text('Clear')),
           ]),
         ],
       )),
@@ -296,7 +414,7 @@ class _VaultHomeState extends State<VaultHome> {
                 final record = records[i];
                 return Card(child: CheckboxListTile(
                   value: _cleanupSelected.contains(record.assetId),
-                  onChanged: (value) => setState(() {
+                  onChanged: c.busy || c.backingUp ? null : (value) => setState(() {
                     if (value == true) { _cleanupSelected.add(record.assetId); }
                     else { _cleanupSelected.remove(record.assetId); }
                   }),
@@ -372,7 +490,7 @@ class _VaultHomeState extends State<VaultHome> {
         Text(c.email ?? 'Not connected', style: const TextStyle(color: Colors.black54)),
         const SizedBox(height: 12),
         if (c.connected)
-          OutlinedButton.icon(onPressed: c.busy ? null : c.disconnect,
+          OutlinedButton.icon(onPressed: c.busy || c.backingUp ? null : c.disconnect,
             icon: const Icon(Icons.logout), label: const Text('Disconnect Google'))
         else
           FilledButton.icon(onPressed: c.connect, icon: const Icon(Icons.login), label: const Text('Connect Google Drive')),
@@ -386,7 +504,7 @@ class _VaultHomeState extends State<VaultHome> {
         _Instruction('3', 'App checks the Google Drive copy again before clean-up'),
         _Instruction('4', 'You approve Android’s system Move to Bin request'),
         SizedBox(height: 10),
-        Text('Files are stored in Drive / Cloud Photo Vault / Year / Month. This app uses the Drive file permission scope and does not send photos to a third-party server.',
+        Text('Files are stored in your chosen folder in My Drive, organised by year and month. This app uses the Drive file permission scope and does not send photos to a third-party server.',
           style: TextStyle(fontSize: 12, color: Colors.black54)),
       ])),
       const SizedBox(height: 12),
@@ -412,6 +530,29 @@ class _VaultHomeState extends State<VaultHome> {
       color: connected ? _teal : const Color(0xFF953F38),
       fontWeight: FontWeight.w800, fontSize: 10,
     )),
+  );
+}
+
+class _GalleryThumbnail extends StatefulWidget {
+  final AssetEntity asset;
+
+  const _GalleryThumbnail({required this.asset, super.key});
+
+  @override
+  State<_GalleryThumbnail> createState() => _GalleryThumbnailState();
+}
+
+class _GalleryThumbnailState extends State<_GalleryThumbnail> {
+  late final Future<Uint8List?> _image = widget.asset.thumbnailDataWithSize(
+    const ThumbnailSize(220, 220), quality: 75,
+  );
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<Uint8List?>(
+    future: _image,
+    builder: (context, snapshot) => snapshot.data == null
+        ? const ColoredBox(color: Color(0xFFE2E9E5), child: Icon(Icons.image_outlined, color: Colors.blueGrey))
+        : Image.memory(snapshot.data!, fit: BoxFit.cover),
   );
 }
 

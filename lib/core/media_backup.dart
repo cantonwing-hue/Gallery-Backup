@@ -114,24 +114,26 @@ class BackupEngine {
     }
 
     var done = 0, uploaded = 0, skipped = 0, errors = 0;
-    final allCount = selected != null ? selected.length : await PhotoManager.getAssetCount();
-    // Background worker visits the next 50-item page on each run, rather
-    // than getting stuck rescanning the same first 50 images forever.
-    final pageSize = maximum == null ? _pageSize : maximum.clamp(1, _pageSize);
-    var total = selected?.length ?? (allCount - startPage * pageSize).clamp(0, allCount);
-    if (maximum != null && maximum < total) total = maximum;
-    var nextPage = (selected == null && total == 0) ? 0 : startPage;
-    BackupProgress status(String name) => BackupProgress(
-      done: done, total: total, uploaded: uploaded,
-      skipped: skipped, errors: errors, currentFile: name,
-      nextPage: nextPage,
-    );
-
     try {
+      final allCount = selected != null ? selected.length : await PhotoManager.getAssetCount();
+      // Background worker visits the next 50-item page on each run, rather
+      // than getting stuck rescanning the same first 50 images forever.
+      final pageSize = maximum == null ? _pageSize : maximum.clamp(1, _pageSize);
+      var total = selected?.length ?? (allCount - startPage * pageSize).clamp(0, allCount);
+      if (maximum != null && maximum < total) total = maximum;
+      var nextPage = (selected == null && total == 0) ? 0 : startPage;
+      BackupProgress status(String name) => BackupProgress(
+        done: done, total: total, uploaded: uploaded,
+        skipped: skipped, errors: errors, currentFile: name,
+        nextPage: nextPage,
+      );
+
+      onProgress?.call(status('Preparing files'));
       Future<void> process(AssetEntity asset) async {
         if (cancelled?.call() == true) return;
         await database.refreshRunLock(holder);
         final title = asset.title ?? asset.id;
+        onProgress?.call(status(title));
         try {
           final record = await backupOne(asset);
           if (record == null) { skipped++; } else { uploaded++; }
@@ -140,7 +142,7 @@ class BackupEngine {
           errors++;
         } finally {
           done++;
-          onProgress?.call(status(title));
+          onProgress?.call(status(done == total ? 'Finishing backup' : title));
         }
       }
 

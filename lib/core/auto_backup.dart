@@ -12,10 +12,14 @@ const _taskName = 'photoVaultPeriodicBackup';
 const _uniqueName = 'photoVaultAuto';
 
 class VaultPreferences {
-  final SharedPreferencesAsync _prefs = SharedPreferencesAsync();
+  late final SharedPreferencesAsync _prefs = SharedPreferencesAsync();
 
   Future<bool> get autoEnabled async => await _prefs.getBool('auto_enabled') ?? false;
   Future<bool> get wifiOnly async => await _prefs.getBool('wifi_only') ?? true;
+  Future<String> get backupFolder async =>
+      await _prefs.getString('backup_folder') ?? defaultBackupFolder;
+
+  Future<void> setBackupFolder(String name) => _prefs.setString('backup_folder', name);
   Future<String> get lastRun async => await _prefs.getString('last_run') ?? 'Never';
   Future<int> get nextAutoPage async => await _prefs.getInt('next_auto_page') ?? 0;
   Future<void> setNextAutoPage(int page) => _prefs.setInt('next_auto_page', page);
@@ -35,7 +39,7 @@ void photoVaultDispatcher() {
     final settings = VaultPreferences();
     if (!await settings.autoEnabled) return true;
     try {
-      final drive = DriveGateway();
+      final drive = DriveGateway()..backupFolder = await settings.backupFolder;
       final account = await drive.restore();
       if (account == null) {
         await settings.setLastRun('Reconnect Google in the app to resume auto backup');

@@ -20,17 +20,59 @@ class VaultController extends ChangeNotifier {
   String notice = '';
   BackupProgress? progress;
   int totalPhotos = 0;
+  int matchingPhotos = 0;
+  bool oldestFirst = false;
+  DateTime? galleryDate;
+  bool loadingPhotos = false;
+  Set<String> lastSelectedBatch = const {};
   int backedUp = 0;
   List<AssetEntity> assets = [];
   List<BackupRecord> readyForCleanup = [];
-  final Set<String> selected = {};
+  final Map<String, AssetEntity> _selectedAssets = {};
+  Iterable<String> get selected => _selectedAssets.keys;
   bool _cancel = false;
   int _page = 0;
   bool _hasMore = true;
 
   String? get email => drive.account?.email;
   bool get connected => drive.account != null;
-  bool get canLoadMore => _hasMore;
+  bool get canLoadMore => _hasMore && !loadingPhotos;
+  String get backupFolder => drive.backupFolder;
+
+  FilterOptionGroup get _galleryFilter {
+    final date = galleryDate;
+    return FilterOptionGroup(
+      orders: [OrderOption(asc: oldestFirst)],
+      createTimeCond: date == null ? null : DateTimeCond(
+        min: DateTime(date.year, date.month),
+        max: DateTime(date.year, date.month + 1).subtract(const Duration(milliseconds: 1)),
+      ),
+    );
+  }
+
+  Future<void> changeGallery({required bool oldest, DateTime? month}) async {
+    if (busy || loadingPhotos || backingUp) return;
+    oldestFirst = oldest;
+    galleryDate = month;
+    await scanPhotos();
+  }
+
+  Future<void> changeBackupFolder(String name) async {
+    if (busy || backingUp || name.trim().isEmpty) return;
+    busy = true;
+    notifyListeners();
+    try {
+      final folder = name.trim();
+      await settings.setBackupFolder(folder);
+      drive.backupFolder = folder;
+      notice = 'New uploads will go to My Drive / $folder';
+    } catch (error) {
+      notice = 'Could not save the Drive folder: $error';
+    } finally {
+      busy = false;
+      notifyListeners();
+    }
+  }
 
   Future<void> initialize() async {
     busy = true;
@@ -38,6 +80,7 @@ class VaultController extends ChangeNotifier {
     try {
       autoEnabled = await settings.autoEnabled;
       wifiOnly = await settings.wifiOnly;
+      drive.backupFolder = await settings.backupFolder;
       try {
         await drive.restore();
       } catch (error) {
@@ -70,7 +113,8 @@ class VaultController extends ChangeNotifier {
 
   Future<void> disconnect() async {
     await drive.disconnect();
-    selected.clear();
+    _selectedAssets.clear();
+    lastSelectedBatch = const {};
     readyForCleanup.clear();
     backedUp = 0;
     autoEnabled = false;
@@ -80,6 +124,7 @@ class VaultController extends ChangeNotifier {
   }
 
   Future<void> scanPhotos() async {
+    if (busy || loadingPhotos || backingUp) return;
     busy = true;
     notice = '';
     notifyListeners();
@@ -89,12 +134,13 @@ class VaultController extends ChangeNotifier {
         return;
       }
       totalPhotos = await PhotoManager.getAssetCount();
+      matchingPhotos = galleryDate == null ? totalPhotos :
+          await PhotoManager.getAssetCount(filterOption: _galleryFilter);
       assets.clear();
-      selected.clear();
       _page = 0;
       _hasMore = true;
       await loadMore();
-      notice = '$totalPhotos photos/videos available to scan';
+      if (notice.isEmpty) notice = '$matchingPhotos photos/videos match this view';
     } catch (error) {
       notice = 'Unable to scan photos: $error';
     } finally {
@@ -104,32 +150,39 @@ class VaultController extends ChangeNotifier {
   }
 
   Future<void> loadMore() async {
-    if (!_hasMore) return;
+    if (!_hasMore || loadingPhotos) return;
+    loadingPhotos = true;
+    notifyListeners();
     try {
-      final next = await PhotoManager.getAssetListPaged(page: _page, pageCount: 80);
+      final next = await PhotoManager.getAssetListPaged(
+        page: _page, pageCount: 80, filterOption: _galleryFilter,
+      );
       _page++;
       assets.addAll(next);
-      _hasMore = next.isNotEmpty && assets.length < totalPhotos;
-      notifyListeners();
+      _hasMore = next.isNotEmpty && assets.length < matchingPhotos;
     } catch (error) {
       _hasMore = false;
       notice = 'Photo loading issue: $error';
+    } finally {
+      loadingPhotos = false;
       notifyListeners();
     }
   }
 
-  void toggleSelect(String id) {
-    selected.contains(id) ? selected.remove(id) : selected.add(id);
+  void toggleSelect(AssetEntity asset) {
+    if (_selectedAssets.remove(asset.id) == null) {
+      _selectedAssets[asset.id] = asset;
+    }
     notifyListeners();
   }
 
   void selectVisible() {
-    selected.addAll(assets.map((e) => e.id));
+    _selectedAssets.addEntries(assets.map((asset) => MapEntry(asset.id, asset)));
     notifyListeners();
   }
 
   void clearSelected() {
-    selected.clear();
+    _selectedAssets.clear();
     notifyListeners();
   }
 
@@ -140,7 +193,7 @@ class VaultController extends ChangeNotifier {
   }
 
   Future<void> startBackup({bool selectedOnly = false}) async {
-    if (backingUp) return;
+    if (backingUp || busy) return;
     backingUp = true;
     _cancel = false;
     progress = null;
@@ -148,21 +201,25 @@ class VaultController extends ChangeNotifier {
     notifyListeners();
     try {
       final list = selectedOnly
-          ? assets.where((asset) => selected.contains(asset.id)).toList()
+          ? _selectedAssets.values.toList()
           : null;
       if (selectedOnly && list!.isEmpty) {
         notice = 'Select photos in the Photos tab first.';
         return;
       }
+      lastSelectedBatch = const {};
       final result = await engine.run(
         selected: list,
         wifiOnly: wifiOnly,
         cancelled: () => _cancel,
         onProgress: (p) { progress = p; notifyListeners(); },
       );
+      if (list != null) {
+        lastSelectedBatch = list.take(result.done).map((asset) => asset.id).toSet();
+      }
       notice = 'Finished: ${result.uploaded} uploaded, ${result.skipped} already safe, ${result.errors} errors';
       await settings.setLastRun(notice);
-      selected.clear();
+      _selectedAssets.clear();
       await refreshCounts();
     } catch (error) {
       notice = 'Backup stopped: $error';
@@ -181,6 +238,7 @@ class VaultController extends ChangeNotifier {
   }
 
   Future<int> trashRecords(List<BackupRecord> records) async {
+    if (busy || backingUp) return 0;
     busy = true;
     notifyListeners();
     try {
