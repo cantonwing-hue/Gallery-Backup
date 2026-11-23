@@ -60,7 +60,7 @@ The second command prompts for the password. Both values are private. Reuse the 
 2. Under **Google Auth Platform**, configure Branding and Audience. Choose **External** and keep the app in **Testing** for personal Gmail use. Add your Google account under **Test users**. In **Data Access**, add `https://www.googleapis.com/auth/drive.file`.
 3. Under **Clients**, create an **Android** client with package name `com.example.cloud_photo_vault` and the SHA-1 shown by `keytool`. You can also use the certificate SHA-1 in the Actions run summary or its `signing-certificate.txt` artifact file. If the APK report omits the colons, insert one between each pair of hex digits.
 4. In the same project, create a **Web application** OAuth client. Copy its ID ending in `.apps.googleusercontent.com`.
-5. In GitHub repository **Settings → Secrets and variables → Actions → Variables**, create `GOOGLE_WEB_CLIENT_ID` with that Web client ID. The workflow compiles it into the APK through `--dart-define`. The client ID is public. Keep the Web client secret out of the app, repository, and build.
+5. In GitHub repository **Settings → Secrets and variables → Actions → Variables**, create `GOOGLE_WEB_CLIENT_ID` with that Web client ID. You can also enter the public ID in the workflow’s optional input when running it manually. The workflow compiles it into the APK through `--dart-define`. The client ID is public. Keep the Web client secret out of the app, repository, and build.
 
 ## Build and install on an Android phone
 

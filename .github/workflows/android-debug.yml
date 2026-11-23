@@ -2,6 +2,11 @@ name: Android debug APK
 
 on:
   workflow_dispatch:
+    inputs:
+      google_web_client_id:
+        description: Public Google Web OAuth client ID (optional repository variable override)
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -11,7 +16,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
-      GOOGLE_WEB_CLIENT_ID: ${{ vars.GOOGLE_WEB_CLIENT_ID }}
+      GOOGLE_WEB_CLIENT_ID: ${{ inputs.google_web_client_id || vars.GOOGLE_WEB_CLIENT_ID }}
     steps:
       - uses: actions/checkout@v5
         with:
