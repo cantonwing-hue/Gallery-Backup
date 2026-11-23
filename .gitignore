@@ -1,0 +1,20 @@
+.dart_tool/
+.packages
+.pub/
+build/
+android/.gradle/
+android/local.properties
+android/key.properties
+*.jks
+*.keystore
+*.iml
+.idea/
+.vscode/
+.DS_Store
+
+# Local signing and generated Flutter tooling.
+*.p12
+*.pfx
+*.keystore.b64
+.flutter-plugins-dependencies
+android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java

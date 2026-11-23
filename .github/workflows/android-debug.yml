@@ -1,0 +1,75 @@
+name: Android debug APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      GOOGLE_WEB_CLIENT_ID: ${{ vars.GOOGLE_WEB_CLIENT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.0'
+          channel: stable
+      - name: Resolve dependencies
+        run: flutter pub get --enforce-lockfile
+      - name: Analyze
+        run: flutter analyze
+      - name: Test
+        run: flutter test
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-35" "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
+      - name: Build signed debug APK
+        env:
+          VAULT_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
+          VAULT_DEBUG_STORE_PASSWORD: ${{ secrets.ANDROID_DEBUG_KEYSTORE_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$VAULT_KEYSTORE_BASE64" || -z "$VAULT_DEBUG_STORE_PASSWORD" ]]; then
+            echo "::error::Configure ANDROID_DEBUG_KEYSTORE_BASE64 and ANDROID_DEBUG_KEYSTORE_PASSWORD as repository Actions secrets."
+            exit 1
+          fi
+          if [[ -z "$GOOGLE_WEB_CLIENT_ID" ]]; then
+            echo "::warning::GOOGLE_WEB_CLIENT_ID is unset. This APK can be installed, but Drive sign-in will be unavailable."
+          elif [[ ! "$GOOGLE_WEB_CLIENT_ID" =~ ^[a-zA-Z0-9_-]+\.apps\.googleusercontent\.com$ ]]; then
+            echo "::error::GOOGLE_WEB_CLIENT_ID must be a Web OAuth client ID."
+            exit 1
+          fi
+          umask 077
+          export VAULT_DEBUG_STORE_FILE="$(mktemp "$RUNNER_TEMP/vault-debug.XXXXXX")"
+          trap 'rm -f -- "$VAULT_DEBUG_STORE_FILE"' EXIT
+          printf '%s' "$VAULT_KEYSTORE_BASE64" | base64 --decode > "$VAULT_DEBUG_STORE_FILE"
+          unset VAULT_KEYSTORE_BASE64
+          flutter build apk --debug --no-pub --dart-define="GOOGLE_WEB_CLIENT_ID=$GOOGLE_WEB_CLIENT_ID"
+      - name: Verify APK and report certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          signer="$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)"
+          mkdir -p apk-artifact
+          cp build/app/outputs/flutter-apk/app-debug.apk apk-artifact/cloud-photo-vault-debug.apk
+          "$signer" verify --print-certs apk-artifact/cloud-photo-vault-debug.apk | tee apk-artifact/signing-certificate.txt
+          if [[ -z "$GOOGLE_WEB_CLIENT_ID" ]]; then
+            echo 'Drive sign-in unavailable in this APK. Set GOOGLE_WEB_CLIENT_ID and rerun.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          cat apk-artifact/signing-certificate.txt >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cloud-photo-vault-android-debug
+          path: apk-artifact/
+          if-no-files-found: error
+          retention-days: 30

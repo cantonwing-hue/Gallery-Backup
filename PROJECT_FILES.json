@@ -1,0 +1,24 @@
+{
+  "project": "Cloud Photo Vault",
+  "version": "0.1.0",
+  "platform": "Android 11+",
+  "provider": "Google Drive",
+  "files": [
+    ".gitignore",
+    "CODEX_HANDOFF.md",
+    "README.md",
+    "README_繁體中文.md",
+    "analysis_options.yaml",
+    "lib/core/auto_backup.dart",
+    "lib/core/backup_database.dart",
+    "lib/core/drive_gateway.dart",
+    "lib/core/media_backup.dart",
+    "lib/core/models.dart",
+    "lib/core/vault_controller.dart",
+    "lib/main.dart",
+    "lib/ui/vault_home.dart",
+    "pubspec.yaml",
+    "scripts/setup_android.py",
+    "test/safety_rules_test.dart"
+  ]
+}
