@@ -31,7 +31,7 @@ jobs:
       - name: Test
         run: flutter test
       - name: Install Android SDK packages
-        run: sdkmanager "platforms;android-35" "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
+        run: sdkmanager "platforms;android-35" "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358" "cmake;3.22.1"
       - name: Build signed debug APK
         env:
           VAULT_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
